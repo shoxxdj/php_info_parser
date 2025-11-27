@@ -627,11 +627,15 @@ class PHPInfoAnalyzer:
         }
         
         # Save JSON report
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+            self.log(f"[✓] Rapport JSON sauvegardé: {output_file}", "success")
+        except Exception as e:
+            self.log(f"[✗] Erreur lors de la sauvegarde du rapport: {str(e)}", "error")
         
         # Print summary
-        self.print_summary(report)
+        self.print_summary(report, output_file)
         
         return report
     
@@ -677,7 +681,7 @@ class PHPInfoAnalyzer:
         
         return vectors
     
-    def print_summary(self, report):
+    def print_summary(self, report, output_file):
         """Print colored summary to console"""
         print("\n" + "="*70)
         print(critical("  RAPPORT D'ANALYSE DE SÉCURITÉ PHPINFO()  "))
@@ -718,37 +722,77 @@ class PHPInfoAnalyzer:
                 print(success(f"  • {point}"))
         
         print("\n" + "="*70)
-        #print(info(f"Rapport détaillé sauvegardé dans: {output_file}"))
+        print(info(f"Rapport détaillé sauvegardé dans: {output_file}"))
         print("="*70 + "\n")
 
 def main():
     parser = argparse.ArgumentParser(
         description='PHPInfo Security Analyzer - Analyse les vulnérabilités',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples d'utilisation:
+  Analyser une URL:
+    %(prog)s --url http://target.com/phpinfo.php --output rapport.json
+    
+  Analyser un fichier HTML local:
+    %(prog)s --input phpinfo.html --output rapport.json -v
+    
+  Mode verbeux pour explications détaillées:
+    %(prog)s -u http://target.com/phpinfo.php -o rapport.json -v
+        """
     )
-    parser.add_argument('--url', '-u', 
+    
+    # Groupe mutuellement exclusif pour URL ou fichier d'entrée
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument('--url', '-u', 
                        dest="url",
-                       help="URL de la page phpinfo()",
-                       required=True)
-    parser.add_argument('--file', '-f',
-                       dest="file",
-                       help="Fichier de sortie (JSON)",
+                       help="URL de la page phpinfo()")
+    input_group.add_argument('--input', '-i',
+                       dest="input_file",
+                       help="Fichier HTML local contenant phpinfo()")
+    
+    parser.add_argument('--output', '-o',
+                       dest="output",
+                       help="Fichier de sortie JSON (défaut: phpinfo_report.json)",
                        default="phpinfo_report.json")
     parser.add_argument('--verbose', '-v',
                        action="store_true",
                        dest="verbose",
-                       help="Mode verbeux")
+                       help="Mode verbeux avec explications détaillées")
     
     args = parser.parse_args()
     
     analyzer = PHPInfoAnalyzer(verbose=args.verbose)
     
-    print(info("[+] Téléchargement de la page phpinfo()..."))
-    source_code = analyzer.get_content(args.url)
-    
-    if not source_code:
-        print(fail("[✗] Impossible de récupérer la page"))
-        sys.exit(1)
+    # Récupération du contenu source
+    if args.url:
+        print(info("[+] Téléchargement de la page phpinfo()..."))
+        source_code = analyzer.get_content(args.url)
+        
+        if not source_code:
+            print(fail("[✗] Impossible de récupérer la page"))
+            sys.exit(1)
+    else:
+        print(info(f"[+] Lecture du fichier local: {args.input_file}"))
+        try:
+            with open(args.input_file, 'r', encoding='utf-8') as f:
+                source_code = f.read()
+            print(success("[✓] Fichier chargé avec succès"))
+        except FileNotFoundError:
+            print(fail(f"[✗] Fichier introuvable: {args.input_file}"))
+            sys.exit(1)
+        except UnicodeDecodeError:
+            print(warning("[!] Encodage UTF-8 échoué, essai avec latin-1..."))
+            try:
+                with open(args.input_file, 'r', encoding='latin-1') as f:
+                    source_code = f.read()
+                print(success("[✓] Fichier chargé avec succès (latin-1)"))
+            except Exception as e:
+                print(fail(f"[✗] Erreur de lecture du fichier: {str(e)}"))
+                sys.exit(1)
+        except Exception as e:
+            print(fail(f"[✗] Erreur lors de la lecture: {str(e)}"))
+            sys.exit(1)
     
     print(info("[+] Extraction des données PHP..."))
     data = analyzer.extract_php_info(source_code)
@@ -785,9 +829,11 @@ def main():
     
     # Generate report
     print(info("\n[+] Génération du rapport..."))
-    analyzer.generate_report(args.file)
+    analyzer.generate_report(args.output)
     
     print(success("\n[✓] Analyse terminée!"))
+    print(info(f"[i] Source: {'URL: ' + args.url if args.url else 'Fichier: ' + args.input_file}"))
+    print(info(f"[i] Rapport sauvegardé: {args.output}"))
 
 if __name__ == "__main__":
     main()
